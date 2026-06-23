@@ -139,6 +139,10 @@ def build_skills_parser(subparsers, *, cmd_skills: Callable) -> None:
         "uninstall", help="Remove a hub-installed skill"
     )
     skills_uninstall.add_argument("name", help="Skill name to remove")
+    skills_uninstall.add_argument(
+        "-y", "--yes", action="store_true",
+        help="Skip confirmation (for automated/UI-driven uninstalls)",
+    )
 
     skills_reset = skills_subparsers.add_parser(
         "reset",
@@ -264,6 +268,20 @@ def build_skills_parser(subparsers, *, cmd_skills: Callable) -> None:
     )
     skills_publish.add_argument(
         "--repo", default="", help="Target GitHub repo (e.g. openai/skills)"
+    )
+
+    skills_store_publish = skills_subparsers.add_parser(
+        "store-publish",
+        help="Publish an installed skill to the fixed Skills Store repo",
+        description=(
+            "Push a locally-installed skill directly to the Hermes Skills Store "
+            "repo (Guying60/zheergen-skills). Self-scans before publishing and "
+            "requires a GITHUB_TOKEN with repo write scope. Drives the desktop "
+            "Store tab's Publish action."
+        ),
+    )
+    skills_store_publish.add_argument(
+        "name", help="Installed skill name (folder under the skills dir)"
     )
 
     skills_snapshot = skills_subparsers.add_parser(

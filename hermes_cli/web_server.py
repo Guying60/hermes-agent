@@ -2324,6 +2324,7 @@ _ACTION_LOG_FILES: Dict[str, str] = {
     "skills-install": "action-skills-install.log",
     "skills-uninstall": "action-skills-uninstall.log",
     "skills-update": "action-skills-update.log",
+    "skills-publish": "action-skills-publish.log",
     "curator-run": "action-curator-run.log",
     "prompt-size": "action-prompt-size.log",
     "dump": "action-dump.log",
@@ -9146,6 +9147,7 @@ async def prune_checkpoints():
 class SkillInstallRequest(BaseModel):
     identifier: str
     profile: Optional[str] = None
+    force: bool = False
 
 
 def _profile_cli_args(profile: Optional[str]) -> List[str]:
@@ -9171,9 +9173,11 @@ async def install_skill_hub(body: SkillInstallRequest, profile: Optional[str] = 
     if not identifier:
         raise HTTPException(status_code=400, detail="identifier is required")
     try:
+        cmd = ["skills", "install", identifier, "--yes"]
+        if body.force:
+            cmd.append("--force")
         proc = _spawn_hermes_action(
-            _profile_cli_args(body.profile or profile)
-            + ["skills", "install", identifier, "--yes"],
+            _profile_cli_args(body.profile or profile) + cmd,
             "skills-install",
         )
     except HTTPException:
@@ -9396,6 +9400,105 @@ async def search_skills_hub(
     except Exception as exc:
         _log.exception("skills hub search failed")
         raise HTTPException(status_code=502, detail=f"Hub search failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Skills Store — the fixed GitHub repo (tools.skills_hub.FIXED_SKILLS_REPO) the
+# desktop "Store" tab browses, installs from, and publishes local skills to.
+# Install/uninstall reuse the existing /api/skills/hub/{install,uninstall}
+# endpoints (identifier = "<repo>/skills/<name>"). These three add: listing the
+# whole repo, a lightweight auth precheck, and a direct-push publish action.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/skills/store/list")
+async def list_store_skills(profile: Optional[str] = None):
+    """Enumerate every skill in the fixed Skills Store repo.
+
+    The repo may be empty (returns ``skills: []``).  Each entry is marked with
+    whether it's already installed (scoped to ``profile``) so the UI can show
+    Install vs. Installed.  Network-bound, so it runs in a thread.
+    """
+
+    def _run():
+        from tools.skills_hub import (
+            FIXED_SKILLS_REPO,
+            FIXED_SKILLS_REPO_PATH,
+            GitHubAuth,
+            GitHubSource,
+        )
+
+        source = GitHubSource(GitHubAuth())
+        metas = source._list_skills_in_repo(FIXED_SKILLS_REPO, FIXED_SKILLS_REPO_PATH)
+        return {
+            "repo": FIXED_SKILLS_REPO,
+            "skills": [_skill_meta_to_payload(m) for m in metas],
+            "installed": _installed_hub_identifiers(profile),
+        }
+
+    try:
+        return await asyncio.to_thread(_run)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("skills store listing failed")
+        raise HTTPException(status_code=502, detail=f"Store listing failed: {exc}")
+
+
+@app.get("/api/skills/store/auth")
+async def store_publish_auth():
+    """Report whether GitHub credentials are available for publishing.
+
+    Publishing pushes files to the store repo and needs a token with
+    ``contents:write`` scope.  The UI calls this before publishing so it can
+    guide the user to configure ``GITHUB_TOKEN`` instead of failing mid-action.
+    """
+
+    def _run():
+        from tools.skills_hub import GitHubAuth
+
+        auth = GitHubAuth()
+        return {
+            "authenticated": bool(auth.is_authenticated()),
+            "method": auth.auth_method(),
+        }
+
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception as exc:
+        _log.exception("skills store auth check failed")
+        raise HTTPException(status_code=502, detail=f"Store auth check failed: {exc}")
+
+
+class SkillStorePublishRequest(BaseModel):
+    name: str
+    profile: Optional[str] = None
+
+
+@app.post("/api/skills/store/publish")
+async def publish_skill_to_store(
+    body: SkillStorePublishRequest, profile: Optional[str] = None
+):
+    """Publish a locally-installed skill to the fixed Store repo.
+
+    Spawned as a background action (git/network bound) whose progress the UI
+    tails via ``/api/actions/skills-publish/status``.
+    """
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    try:
+        proc = _spawn_hermes_action(
+            _profile_cli_args(body.profile or profile)
+            + ["skills", "store-publish", name],
+            "skills-publish",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Failed to spawn skills store publish")
+        raise HTTPException(status_code=500, detail=f"Failed to publish skill: {exc}")
+    return {"ok": True, "pid": proc.pid, "name": "skills-publish"}
 
 
 @app.get("/api/skills/hub/preview")

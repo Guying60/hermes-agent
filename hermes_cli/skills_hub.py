@@ -1568,6 +1568,197 @@ def _github_publish(skill_path: Path, skill_name: str, target_repo: str,
         return False, f"Network error creating PR: {e}"
 
 
+def _github_push_direct(skill_path: Path, skill_name: str, repo: str,
+                        auth, branch: str = "main") -> tuple:
+    """Push a skill's files directly onto a branch of ``repo``.
+
+    Unlike :func:`_github_publish` (fork → branch → PR), this commits straight
+    to ``branch`` of a repo the caller owns/can write to — the model used by the
+    Skills Store (publish to your own ``Guying60/zheergen-skills``). Each file
+    goes to ``skills/<skill_name>/<rel>`` via the Contents API. Existing files
+    are overwritten: the PUT carries the current blob ``sha`` (required by
+    GitHub, otherwise it 422s on an update). Returns ``(success, message)``.
+    """
+    import base64
+    import httpx
+
+    headers = auth.get_headers()
+
+    # Resolve the repo's default branch if the requested branch doesn't exist
+    # yet (e.g. a brand-new, empty repo created with no commits).
+    try:
+        resp = httpx.get(
+            f"https://api.github.com/repos/{repo}",
+            headers=headers, timeout=15,
+        )
+        if resp.status_code == 404:
+            return False, f"Repo {repo} not found or token lacks access"
+        if resp.status_code == 403:
+            return False, "GitHub token lacks permission to access the repo"
+        repo_info = resp.json()
+        default_branch = repo_info.get("default_branch") or branch
+
+        # An empty repo (no commits, e.g. created without a README) has no
+        # default_branch. The Contents API needs a branch, so we can't push
+        # until the user creates an initial commit (e.g. via the GitHub UI).
+        if repo_info.get("default_branch") is None:
+            return (
+                False,
+                f"Repo {repo} is empty (no commits). "
+                "Create an initial commit (README) via the GitHub UI first, "
+                "then publish again."
+            )
+    except httpx.HTTPError as e:
+        return False, f"Network error reaching {repo}: {e}"
+
+    target_branch = branch or default_branch
+
+    uploaded = 0
+    for f in sorted(skill_path.rglob("*")):
+        if not f.is_file():
+            continue
+        rel = f.relative_to(skill_path).as_posix()
+        upload_path = f"skills/{skill_name}/{rel}"
+        contents_url = f"https://api.github.com/repos/{repo}/contents/{upload_path}"
+
+        # Fetch the existing blob sha (if any) so an update doesn't 422.
+        existing_sha = None
+        try:
+            head = httpx.get(
+                contents_url, headers=headers, timeout=15,
+                params={"ref": target_branch},
+            )
+            if head.status_code == 200:
+                payload = head.json()
+                if isinstance(payload, dict):
+                    existing_sha = payload.get("sha")
+        except httpx.HTTPError:
+            # Treat a failed existence check as "file is new" — the PUT below
+            # surfaces any real error.
+            existing_sha = None
+
+        body = {
+            "message": f"Publish {skill_name} skill: {rel}",
+            "content": base64.b64encode(f.read_bytes()).decode(),
+            "branch": target_branch,
+        }
+        if existing_sha:
+            body["sha"] = existing_sha
+
+        try:
+            put = httpx.put(contents_url, headers=headers, timeout=30, json=body)
+        except httpx.HTTPError as e:
+            return False, f"Network error uploading {rel}: {e}"
+        if put.status_code not in {200, 201}:
+            detail = put.text[:200]
+            return False, f"Failed to upload {rel}: {put.status_code} {detail}"
+        uploaded += 1
+
+    if uploaded == 0:
+        return False, "Skill directory has no files to publish"
+
+    repo_url = f"https://github.com/{repo}/tree/{target_branch}/skills/{skill_name}"
+    return True, f"Published {uploaded} file(s) to {repo}@{target_branch}: {repo_url}"
+
+
+def do_publish_to_store(skill_name: str, console: Optional[Console] = None) -> None:
+    """Publish a locally-installed skill directly to the fixed Skills Store repo.
+
+    Resolves ``skill_name`` under the user's skills dir, self-scans (refusing a
+    DANGEROUS verdict), checks GitHub auth, then pushes to
+    ``FIXED_SKILLS_REPO`` via :func:`_github_push_direct`. Drives both the
+    desktop Store "Publish" action and the ``hermes skills store-publish`` CLI.
+
+    Every error path calls ``sys.exit(1)`` so the desktop action poller sees a
+    non-zero exit and surfaces the failure to the user instead of silently
+    reporting success.
+    """
+    import sys as _sys
+
+    from tools.skills_hub import FIXED_SKILLS_REPO, GitHubAuth, SKILLS_DIR
+    from tools.skills_guard import scan_skill, format_scan_report
+
+    c = console or _console
+    name = (skill_name or "").strip()
+    if not name:
+        c.print("[bold red]Error:[/] a skill name is required.\n")
+        _sys.exit(1)
+
+    # Resolve the skill directory. Accept a bare name (the common case from the
+    # Store UI) or a relative path under the skills dir. Skills are often nested
+    # in category sub-directories (e.g. productivity/meeting-minutes), so fall
+    # back to a recursive scan when SKILLS_DIR/<name> doesn't exist.
+    path = Path(name)
+    if not path.is_absolute():
+        path = SKILLS_DIR / name
+    found = path.exists() and (path / "SKILL.md").exists()
+    if not found:
+        import yaml as _yaml_s
+        for cand in sorted(SKILLS_DIR.rglob("SKILL.md")):
+            if not is_excluded_skill_path(cand):
+                cand_dir = cand.parent
+                # Match by directory leaf-name first (the usual convention).
+                if cand_dir.name == name:
+                    path = cand_dir
+                    found = True
+                    break
+                # Also try the YAML frontmatter `name:` field.
+                try:
+                    text = cand.read_text(encoding="utf-8")
+                    if text.startswith("---"):
+                        _match = re.search(r'\n---\s*\n', text[3:])
+                        if _match:
+                            fm = _yaml_s.safe_load(text[3:_match.start() + 3]) or {}
+                            if isinstance(fm, dict) and str(fm.get("name", "")).strip() == name:
+                                path = cand_dir
+                                found = True
+                                break
+                except Exception:
+                    pass
+    if not found:
+        c.print(f"[bold red]Error:[/] No installed skill named '{name}' "
+                f"(looked recursively under {display_hermes_home()}/skills).\n")
+        _sys.exit(1)
+
+    # Prefer the frontmatter name for the published directory so it matches the
+    # canonical skill identity rather than a possibly-renamed local folder.
+    publish_name = name
+    try:
+        import re
+        import yaml
+        skill_md = (path / "SKILL.md").read_text(encoding="utf-8")
+        if skill_md.startswith("---"):
+            match = re.search(r'\n---\s*\n', skill_md[3:])
+            if match:
+                fm = yaml.safe_load(skill_md[3:match.start() + 3]) or {}
+                if isinstance(fm, dict) and fm.get("name"):
+                    publish_name = str(fm["name"]).strip() or name
+    except Exception:
+        publish_name = name
+
+    c.print(f"[bold]Scanning '{publish_name}' before publish...[/]")
+    result = scan_skill(path, source="self")
+    c.print(format_scan_report(result))
+    if result.verdict == "dangerous":
+        c.print("[bold red]Cannot publish a skill with DANGEROUS verdict.[/]\n")
+        _sys.exit(1)
+
+    auth = GitHubAuth()
+    if not auth.is_authenticated():
+        c.print("[bold red]Error:[/] GitHub authentication required.\n"
+                f"Set GITHUB_TOKEN (with repo write scope) in "
+                f"{display_hermes_home()}/.env or run 'gh auth login'.\n")
+        _sys.exit(1)
+
+    c.print(f"[bold]Publishing '{publish_name}' to {FIXED_SKILLS_REPO}...[/]")
+    success, msg = _github_push_direct(path, publish_name, FIXED_SKILLS_REPO, auth)
+    if success:
+        c.print(f"[bold green]{msg}[/]\n")
+    else:
+        c.print(f"[bold red]Error:[/] {msg}\n")
+        _sys.exit(1)
+
+
 def do_snapshot_export(output_path: str, console: Optional[Console] = None) -> None:
     """Export current hub skill configuration to a portable JSON file."""
     from tools.skills_hub import HubLockFile, TapsManager
@@ -1687,7 +1878,7 @@ def skills_command(args) -> None:
         do_audit(name=getattr(args, "name", None),
                  deep=getattr(args, "deep", False))
     elif action == "uninstall":
-        do_uninstall(args.name)
+        do_uninstall(args.name, skip_confirm=getattr(args, "yes", False))
     elif action == "reset":
         do_reset(args.name, restore=getattr(args, "restore", False),
                  skip_confirm=getattr(args, "yes", False))
@@ -1709,6 +1900,8 @@ def skills_command(args) -> None:
             target=getattr(args, "to", "github"),
             repo=getattr(args, "repo", ""),
         )
+    elif action == "store-publish":
+        do_publish_to_store(args.name)
     elif action == "snapshot":
         snap_action = getattr(args, "snapshot_action", None)
         if snap_action == "export":

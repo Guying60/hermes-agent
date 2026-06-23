@@ -549,6 +549,34 @@ export interface SkillInfo {
   name: string
 }
 
+/** One skill listed by the Skills Store (`GET /api/skills/store/list`).
+ *  Mirrors the backend's `_skill_meta_to_payload`, plus `installed` derived
+ *  from the hub lock file. */
+export interface StoreSkillInfo {
+  name: string
+  description: string
+  identifier: string
+  source: string
+  trust_level: string
+  repo: string | null
+  tags: string[]
+  installed: boolean
+}
+
+/** Shape of `GET /api/skills/store/list`. `skills` is empty for an empty repo. */
+export interface StoreListResponse {
+  repo: string
+  skills: StoreSkillInfo[]
+  installed: Record<string, { name?: string; trust_level?: string; scan_verdict?: string }>
+}
+
+/** Shape of `GET /api/skills/store/auth` — whether a GitHub token is available
+ *  for publishing (push) to the store repo. */
+export interface StoreAuthInfo {
+  authenticated: boolean
+  method: string
+}
+
 export interface ToolsetInfo {
   configured: boolean
   description: string

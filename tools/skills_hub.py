@@ -55,6 +55,13 @@ AUDIT_LOG = HUB_DIR / "audit.log"
 TAPS_FILE = HUB_DIR / "taps.json"
 INDEX_CACHE_DIR = HUB_DIR / "index-cache"
 
+# Fixed "Skills Store" repository — browsed/installed and published-to by the
+# desktop Skills Store tab. Registered as a default tap (see
+# GitHubSource.DEFAULT_TAPS) so its skills surface in search/browse, and used
+# as the publish target by do_publish_to_store (hermes_cli/skills_hub.py).
+FIXED_SKILLS_REPO = "Guying60/zheergen-skills"
+FIXED_SKILLS_REPO_PATH = "skills/"
+
 # Cache duration for remote index fetches
 INDEX_CACHE_TTL = 3600  # 1 hour
 
@@ -411,6 +418,10 @@ class GitHubSource(SkillSource):
         # https://github.com/NVIDIA/skills/tree/main/skills
         {"repo": "NVIDIA/skills", "path": "skills/"},
         {"repo": "garrytan/gstack", "path": ""},
+        # Hermes "Skills Store" — the fixed repo the desktop Store tab browses,
+        # installs from, and publishes to. Standard skills/<name>/SKILL.md
+        # layout. See FIXED_SKILLS_REPO above.
+        {"repo": FIXED_SKILLS_REPO, "path": FIXED_SKILLS_REPO_PATH},
     ]
 
     def __init__(self, auth: GitHubAuth, extra_taps: Optional[List[Dict]] = None):

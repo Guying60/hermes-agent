@@ -22,7 +22,9 @@ import { asText, includesQuery, prettyName, toolNames, toolsetDisplayLabel } fro
 import { ToolsetConfigPanel } from '../settings/toolset-config-panel'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
-const SKILLS_MODES = ['skills', 'toolsets'] as const
+import { StoreView } from './store-view'
+
+const SKILLS_MODES = ['skills', 'toolsets', 'store'] as const
 type SkillsMode = (typeof SKILLS_MODES)[number]
 
 function categoryFor(skill: SkillInfo): string {
@@ -211,8 +213,16 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
         ) : undefined
       }
       onSearchChange={setQuery}
-      searchHidden={mode === 'skills' ? (skills?.length ?? 0) === 0 : (toolsets?.length ?? 0) === 0}
-      searchPlaceholder={mode === 'skills' ? t.skills.searchSkills : t.skills.searchToolsets}
+      searchHidden={
+        mode === 'skills'
+          ? (skills?.length ?? 0) === 0
+          : mode === 'toolsets'
+            ? (toolsets?.length ?? 0) === 0
+            : false
+      }
+      searchPlaceholder={
+        mode === 'skills' ? t.skills.searchSkills : mode === 'toolsets' ? t.skills.searchToolsets : t.skills.searchStore
+      }
       searchTrailingAction={
         <Button
           aria-label={refreshing ? t.skills.refreshing : t.skills.refresh}
@@ -236,10 +246,17 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
           <TextTab active={mode === 'toolsets'} onClick={() => setMode('toolsets')}>
             {t.skills.tabToolsets}
           </TextTab>
+          <TextTab active={mode === 'store'} onClick={() => setMode('store')}>
+            {t.skills.tabStore}
+          </TextTab>
         </>
       }
     >
-      {!skills || !toolsets ? (
+      {mode === 'store' ? (
+        <div className={cn('h-full overflow-y-auto py-3', PAGE_INSET_X)}>
+          <StoreView query={query} />
+        </div>
+      ) : !skills || !toolsets ? (
         <PageLoader label={t.skills.loading} />
       ) : mode === 'skills' ? (
         <div className={cn('h-full overflow-y-auto py-3', PAGE_INSET_X)}>

@@ -557,6 +557,32 @@ export interface Translations {
     toolsetDisabled: string
     appliesToNewSessions: (name: string) => string
     failedToUpdate: (name: string) => string
+    tabStore: string
+    searchStore: string
+    storeLoadFailed: string
+    storeEmptyTitle: string
+    storeEmptyDesc: string
+    install: string
+    installing: string
+    installed: string
+    uninstall: string
+    uninstalling: string
+    skillInstalled: (name: string) => string
+    skillUninstalled: (name: string) => string
+    skillInstallFailed: (name: string) => string
+    skillUninstallFailed: (name: string) => string
+    publish: string
+    publishing: string
+    publishSkill: string
+    publishPickSkill: string
+    publishPickPlaceholder: string
+    publishNoLocalSkills: string
+    publishConfirm: (name: string) => string
+    skillPublished: (name: string) => string
+    skillPublishFailed: (name: string) => string
+    storeAuthMissingTitle: string
+    storeAuthMissingDesc: string
+    storeAuthConfigure: string
   }
 
   agents: {

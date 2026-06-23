@@ -41,6 +41,9 @@ import type {
   SessionSearchResponse,
   SkillInfo,
   StatusResponse,
+  StoreAuthInfo,
+  StoreListResponse,
+  StoreSkillInfo,
   ToolsetConfig,
   ToolsetInfo
 } from '@/types/hermes'
@@ -108,6 +111,9 @@ export type {
   SkillInfo,
   StaleAuxAssignment,
   StatusResponse,
+  StoreAuthInfo,
+  StoreListResponse,
+  StoreSkillInfo,
   ToolsetConfig,
   ToolsetInfo
 } from '@/types/hermes'
@@ -489,6 +495,63 @@ export function toggleSkill(name: string, enabled: boolean): Promise<{ ok: boole
     path: '/api/skills/toggle',
     method: 'PUT',
     body: { name, enabled }
+  })
+}
+
+/** List every skill in the fixed Skills Store repo, each flagged with whether
+ *  it's already installed. Returns `[]` for an empty repo. */
+export async function getStoreSkills(): Promise<StoreSkillInfo[]> {
+  const res = await window.hermesDesktop.api<StoreListResponse>({
+    ...profileScoped(),
+    path: '/api/skills/store/list'
+  })
+
+  const installed = res.installed || {}
+
+  return (res.skills || []).map(skill => ({
+    ...skill,
+    installed: skill.installed || skill.identifier in installed
+  }))
+}
+
+/** Install a store skill by its hub identifier (`<repo>/skills/<name>`).
+ *  Backgrounded — poll `getActionStatus('skills-install')` for progress. */
+export function installStoreSkill(identifier: string): Promise<ActionResponse & { pid?: number }> {
+  return window.hermesDesktop.api<ActionResponse & { pid?: number }>({
+    ...profileScoped(),
+    path: '/api/skills/hub/install',
+    method: 'POST',
+    body: { identifier, force: true }
+  })
+}
+
+/** Remove a hub-installed store skill by name.
+ *  Backgrounded — poll `getActionStatus('skills-uninstall')` for progress. */
+export function uninstallStoreSkill(name: string): Promise<ActionResponse & { pid?: number }> {
+  return window.hermesDesktop.api<ActionResponse & { pid?: number }>({
+    ...profileScoped(),
+    path: '/api/skills/hub/uninstall',
+    method: 'POST',
+    body: { name }
+  })
+}
+
+/** Publish a locally-installed skill to the fixed Store repo (direct push).
+ *  Backgrounded — poll `getActionStatus('skills-publish')` for progress. */
+export function publishSkillToStore(name: string): Promise<ActionResponse & { pid?: number }> {
+  return window.hermesDesktop.api<ActionResponse & { pid?: number }>({
+    ...profileScoped(),
+    path: '/api/skills/store/publish',
+    method: 'POST',
+    body: { name }
+  })
+}
+
+/** Report whether GitHub credentials are available for publishing to the store. */
+export function getStoreAuth(): Promise<StoreAuthInfo> {
+  return window.hermesDesktop.api<StoreAuthInfo>({
+    ...profileScoped(),
+    path: '/api/skills/store/auth'
   })
 }
 
